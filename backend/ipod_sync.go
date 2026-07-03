@@ -415,6 +415,46 @@ func (m *SyncManifest) Has(spotifyID string) bool {
 	return ok
 }
 
+// ExistsOnDevice reports whether the track is recorded AND its file is actually
+// present on the given iPod music path. This verifies against the iPod's real
+// contents instead of trusting the manifest blindly, so tracks deleted from the
+// device (or a manifest carried over to a different iPod) are re-synced.
+func (m *SyncManifest) ExistsOnDevice(spotifyID, musicPath string) bool {
+	m.mu.Lock()
+	entry, ok := m.Entries[spotifyID]
+	m.mu.Unlock()
+	if !ok {
+		return false
+	}
+	return manifestEntryFileExists(entry, musicPath)
+}
+
+func manifestEntryFileExists(entry SyncManifestEntry, musicPath string) bool {
+	if entry.DestPath != "" {
+		if info, err := os.Stat(entry.DestPath); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	// Same iPod remounted under a different volume name: look for the same
+	// <relDir>/<filename> path under the current music path.
+	if entry.DestPath != "" && musicPath != "" {
+		rel := filepath.Join(filepath.Base(filepath.Dir(entry.DestPath)), filepath.Base(entry.DestPath))
+		if info, err := os.Stat(filepath.Join(musicPath, rel)); err == nil && !info.IsDir() {
+			return true
+		}
+	}
+	return false
+}
+
+// Remove deletes a track's manifest entry (e.g. when its file is no longer on
+// the device and needs to be re-synced).
+func (m *SyncManifest) Remove(spotifyID string) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	delete(m.Entries, spotifyID)
+}
+
 // Add records a synced track.
 func (m *SyncManifest) Add(spotifyID, destPath string, size int64) {
 	m.mu.Lock()

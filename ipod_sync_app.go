@@ -258,9 +258,18 @@ func (a *App) SyncLibraryToIpod() (IpodSyncResult, error) {
 		a.emitSyncStatus(fmt.Sprintf("(%d/%d) %s", i+1, result.Total, label))
 		a.emitSyncProgress(int(float64(i) / float64(result.Total) * 100))
 
-		if t.SpotifyID != "" && manifest.Has(t.SpotifyID) {
-			result.Skipped++
-			continue
+		if t.SpotifyID != "" {
+			// Skip only when the track is genuinely present on the iPod, not
+			// merely recorded in our manifest. If it was deleted from the device
+			// (or the manifest came from a different iPod), drop the stale entry
+			// and re-sync it.
+			if manifest.ExistsOnDevice(t.SpotifyID, dev.MusicPath) {
+				result.Skipped++
+				continue
+			}
+			if manifest.Has(t.SpotifyID) {
+				manifest.Remove(t.SpotifyID)
+			}
 		}
 
 		flacPath, derr := a.downloadLibraryTrack(t, services, stagingBase, tidalAPI, qobuzAPI)
