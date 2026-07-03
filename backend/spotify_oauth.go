@@ -227,6 +227,10 @@ func BeginSpotifyAuth() (authURL string, err error) {
 	params.Set("redirect_uri", spotifyRedirectURI)
 	params.Set("scope", spotifyScopes)
 	params.Set("state", oauthState)
+	// Always show the consent screen so the user is explicitly asked to grant
+	// access to their private (and collaborative) playlists, even if they have
+	// authorized this app before.
+	params.Set("show_dialog", "true")
 
 	return spotifyAuthorizeURL + "?" + params.Encode(), nil
 }
