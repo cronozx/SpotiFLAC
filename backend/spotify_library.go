@@ -88,9 +88,14 @@ type spotifyPlaylistPage struct {
 			DisplayName string `json:"display_name"`
 			ID          string `json:"id"`
 		} `json:"owner"`
+		// Spotify's simplified playlist object historically exposed the track
+		// count under "tracks"; newer responses use "items". Parse both.
 		Tracks struct {
 			Total int `json:"total"`
 		} `json:"tracks"`
+		TrackItems struct {
+			Total int `json:"total"`
+		} `json:"items"`
 		ExternalURLs spotifyExternalURLs `json:"external_urls"`
 	} `json:"items"`
 	Next string `json:"next"`
@@ -105,6 +110,9 @@ type spotifySavedTracksPage struct {
 
 type spotifyPlaylistTracksPage struct {
 	Items []struct {
+		// The /playlists/{id}/items endpoint nests the track under "item";
+		// the legacy /tracks endpoint used "track". Accept either.
+		Item    *spotifyTrack `json:"item"`
 		Track   *spotifyTrack `json:"track"`
 		IsLocal bool          `json:"is_local"`
 	} `json:"items"`
@@ -201,11 +209,15 @@ func FetchUserPlaylists() ([]LibraryPlaylist, error) {
 			if url == "" {
 				url = "https://open.spotify.com/playlist/" + item.ID
 			}
+			trackCount := item.Tracks.Total
+			if trackCount == 0 {
+				trackCount = item.TrackItems.Total
+			}
 			playlists = append(playlists, LibraryPlaylist{
 				ID:         item.ID,
 				Name:       item.Name,
 				URL:        url,
-				TrackCount: item.Tracks.Total,
+				TrackCount: trackCount,
 				Owner:      owner,
 			})
 		}
@@ -243,7 +255,9 @@ func FetchLikedTracks() ([]LibraryTrack, error) {
 // FetchPlaylistTracks returns all non-local tracks in a playlist.
 func FetchPlaylistTracks(playlistID, playlistName string) ([]LibraryTrack, error) {
 	tracks := make([]LibraryTrack, 0)
-	next := spotifyAPIBase + "/playlists/" + playlistID + "/tracks?limit=100"
+	// Spotify deprecated /playlists/{id}/tracks (now returns 403); the current
+	// endpoint is /playlists/{id}/items.
+	next := spotifyAPIBase + "/playlists/" + playlistID + "/items?limit=100"
 
 	for next != "" {
 		var page spotifyPlaylistTracksPage
@@ -252,10 +266,14 @@ func FetchPlaylistTracks(playlistID, playlistName string) ([]LibraryTrack, error
 		}
 
 		for _, item := range page.Items {
-			if item.Track == nil || item.Track.ID == "" || item.IsLocal || item.Track.IsLocal {
+			track := item.Item
+			if track == nil {
+				track = item.Track
+			}
+			if track == nil || track.ID == "" || item.IsLocal || track.IsLocal {
 				continue
 			}
-			tracks = append(tracks, trackToLibraryTrack(item.Track, playlistName))
+			tracks = append(tracks, trackToLibraryTrack(track, playlistName))
 		}
 
 		next = page.Next
