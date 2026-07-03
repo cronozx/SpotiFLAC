@@ -30,6 +30,7 @@ import { SettingsPage } from "@/components/SettingsPage";
 import { DebugLoggerPage } from "@/components/DebugLoggerPage";
 import { OtherProjects } from "@/components/OtherProjects";
 import { HistoryPage } from "@/components/HistoryPage";
+import { IpodSyncPage } from "@/components/IpodSyncPage";
 import { SupportPage } from "@/components/SupportPage";
 import type { HistoryItem } from "@/components/FetchHistory";
 import { useDownload } from "@/hooks/useDownload";
@@ -578,6 +579,8 @@ function App() {
                 return <FileManagerPage />;
             case "lyrics-manager":
                 return <LyricsManagerPage />;
+            case "ipod-sync":
+                return <IpodSyncPage />;
             default:
                 return (<>
                     <Header version={CURRENT_VERSION} hasUpdate={hasUpdate} releaseDate={releaseDate}/>

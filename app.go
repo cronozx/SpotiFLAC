@@ -272,6 +272,9 @@ func (a *App) startup(ctx context.Context) {
 	if err := backend.SanitizePersistedConfigSettings(); err != nil {
 		fmt.Printf("Failed to sanitize persisted config settings: %v\n", err)
 	}
+
+	// Sync the Spotify library to a connected Rockbox iPod on launch when enabled.
+	go a.maybeAutoSyncIpod()
 }
 
 func (a *App) shutdown(ctx context.Context) {

@@ -17,8 +17,9 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { Checkbox } from "@/components/ui/checkbox";
 import { Tooltip, TooltipContent, TooltipTrigger, } from "@/components/ui/tooltip";
 import { Button } from "@/components/ui/button";
+import { Smartphone } from "lucide-react";
 import { openExternal } from "@/lib/utils";
-export type PageType = "main" | "settings" | "debug" | "audio-analysis" | "audio-converter" | "audio-resampler" | "file-manager" | "lyrics-manager" | "projects" | "support" | "history";
+export type PageType = "main" | "settings" | "debug" | "audio-analysis" | "audio-converter" | "audio-resampler" | "file-manager" | "lyrics-manager" | "projects" | "support" | "history" | "ipod-sync";
 interface SidebarProps {
     currentPage: PageType;
     onPageChange: (page: PageType) => void;
@@ -72,6 +73,17 @@ export function Sidebar({ currentPage, onPageChange }: SidebarProps) {
                     </TooltipTrigger>
                     <TooltipContent side="right">
                         <p>History</p>
+                    </TooltipContent>
+                </Tooltip>
+
+                <Tooltip delayDuration={0}>
+                    <TooltipTrigger asChild>
+                        <Button variant={currentPage === "ipod-sync" ? "secondary" : "ghost"} size="icon" className={`h-10 w-10 ${currentPage === "ipod-sync" ? "bg-primary/10 text-primary hover:bg-primary/20" : "hover:bg-primary/10 hover:text-primary"}`} onClick={() => onPageChange("ipod-sync")}>
+                            <Smartphone size={20}/>
+                        </Button>
+                    </TooltipTrigger>
+                    <TooltipContent side="right">
+                        <p>iPod Sync</p>
                     </TooltipContent>
                 </Tooltip>
 
