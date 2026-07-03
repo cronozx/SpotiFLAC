@@ -35,6 +35,7 @@ type spotifyOAuthState struct {
 	AccessToken  string `json:"accessToken"`
 	RefreshToken string `json:"refreshToken"`
 	ExpiresAt    int64  `json:"expiresAt"`
+	Scope        string `json:"scope"`
 }
 
 var (
@@ -327,8 +328,43 @@ func exchangeSpotifyCode(code string) error {
 		current.RefreshToken = tokenResp.RefreshToken
 	}
 	current.ExpiresAt = time.Now().Unix() + int64(tokenResp.ExpiresIn)
+	if tokenResp.Scope != "" {
+		current.Scope = tokenResp.Scope
+	}
+
+	if !scopeGranted(current.Scope, "playlist-read-private") {
+		fmt.Printf("[spotify oauth] WARNING: 'playlist-read-private' was not granted; private playlists will not be listed. Granted scopes: %q\n", current.Scope)
+	}
 
 	return saveSpotifyOAuthState(current)
+}
+
+// scopeGranted reports whether a space-separated scope string contains want.
+func scopeGranted(granted, want string) bool {
+	for _, s := range strings.Fields(granted) {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// SpotifyGrantedScopes returns the space-separated scopes the user actually
+// approved during the last successful authorization.
+func SpotifyGrantedScopes() string {
+	spotifyOAuthMu.Lock()
+	defer spotifyOAuthMu.Unlock()
+	state, err := loadSpotifyOAuthState()
+	if err != nil {
+		return ""
+	}
+	return state.Scope
+}
+
+// SpotifyHasPrivatePlaylistAccess reports whether the granted scopes include
+// private-playlist read access.
+func SpotifyHasPrivatePlaylistAccess() bool {
+	return scopeGranted(SpotifyGrantedScopes(), "playlist-read-private")
 }
 
 type spotifyTokenResponse struct {

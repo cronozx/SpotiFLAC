@@ -95,9 +95,11 @@ func (a *App) SaveSpotifyCredentials(clientID, clientSecret string) error {
 func (a *App) GetSpotifyCredentials() (map[string]interface{}, error) {
 	clientID, clientSecret, connected, err := backend.GetSpotifyCredentials()
 	return map[string]interface{}{
-		"clientId":     clientID,
-		"clientSecret": clientSecret,
-		"connected":    connected,
+		"clientId":         clientID,
+		"clientSecret":     clientSecret,
+		"connected":        connected,
+		"grantedScopes":    backend.SpotifyGrantedScopes(),
+		"privatePlaylists": backend.SpotifyHasPrivatePlaylistAccess(),
 	}, err
 }
 
