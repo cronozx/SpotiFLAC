@@ -7,8 +7,8 @@ import { Badge } from "@/components/ui/badge";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
-import { Smartphone, HardDrive, Music, Heart, ListMusic, Save, PlugZap, Unplug, RefreshCw, Search, Download, StopCircle, CheckCircle2, XCircle, Info, RotateCw } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
+import { HardDrive, Heart, RotateCw, PlugZap, Unplug, Save, RefreshCw, Search, Download, StopCircle, CheckCircle2, ChevronDown, Settings2 } from "lucide-react";
 import { SaveSpotifyCredentials, GetSpotifyCredentials, ConnectSpotify, SpotifyConnectionStatus, DisconnectSpotify, DetectIpod, GetIpodSyncSettings, SaveIpodSyncSettings, ListSpotifyPlaylists, SyncLibraryToIpod, CancelIpodSync } from "../../wailsjs/go/main/App";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { toastWithSound as toast } from "@/lib/toast-with-sound";
@@ -68,6 +68,7 @@ export function IpodSyncPage() {
     const [connected, setConnected] = useState(false);
     const [savingCredentials, setSavingCredentials] = useState(false);
     const [connecting, setConnecting] = useState(false);
+    const [showCredentials, setShowCredentials] = useState(false);
 
     const [ipod, setIpod] = useState<IpodInfo | null>(null);
     const [detecting, setDetecting] = useState(false);
@@ -81,10 +82,13 @@ export function IpodSyncPage() {
     const [progress, setProgress] = useState(0);
     const [statusLine, setStatusLine] = useState("");
     const [log, setLog] = useState<string[]>([]);
+    const [showLog, setShowLog] = useState(false);
     const [syncResult, setSyncResult] = useState<SyncResult | null>(null);
 
     const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
     const logContainerRef = useRef<HTMLDivElement | null>(null);
+
+    const showCredentialFields = !connected || showCredentials;
 
     useEffect(() => {
         const loadInitial = async () => {
@@ -143,7 +147,7 @@ export function IpodSyncPage() {
         if (container) {
             container.scrollTop = container.scrollHeight;
         }
-    }, [log]);
+    }, [log, showLog]);
 
     const persistSettings = async (next: IpodSyncSettings) => {
         setSettings(next);
@@ -188,6 +192,7 @@ export function IpodSyncPage() {
                 if (isConnected) {
                     setConnected(true);
                     setConnecting(false);
+                    setShowCredentials(false);
                     if (pollRef.current) {
                         clearInterval(pollRef.current);
                         pollRef.current = null;
@@ -320,189 +325,126 @@ export function IpodSyncPage() {
         }
     };
 
-    return (<div className="space-y-6">
-        <div className="flex items-center gap-3">
+    const usedBytes = ipod ? Math.max(0, ipod.total_bytes - ipod.free_bytes) : 0;
+    const usedPercent = ipod && ipod.total_bytes > 0 ? (usedBytes / ipod.total_bytes) * 100 : 0;
+
+    return (<div className="mx-auto max-w-2xl space-y-4">
+        <div>
             <h1 className="text-2xl font-bold">iPod Sync</h1>
-            {connected && (<Badge className="gap-1 border-transparent bg-green-600 text-white hover:bg-green-600">
-                <CheckCircle2 className="h-3 w-3"/>
-                Connected
-            </Badge>)}
+            <p className="text-sm text-muted-foreground">Copy your Spotify library to your Rockbox iPod as FLAC.</p>
         </div>
 
+        {/* Setup: Spotify + iPod */}
         <Card>
-            <CardHeader>
-                <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-1">
-                        <CardTitle className="flex items-center gap-2">
-                            <Music className="h-4 w-4"/>
-                            Spotify Connection
-                        </CardTitle>
-                        <CardDescription>
-                            Connect your own Spotify app to read your library.
-                        </CardDescription>
+            <CardContent className="divide-y pt-6">
+                {/* Spotify */}
+                <div className="space-y-3 pb-4">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium">Spotify</span>
+                        <div className="flex items-center gap-2">
+                            {connected && (<Badge className="gap-1 border-transparent bg-green-600 text-white hover:bg-green-600">
+                                <CheckCircle2 className="h-3 w-3"/>
+                                Connected
+                            </Badge>)}
+                            {connected && (<Button variant="ghost" size="sm" className="h-7 gap-1.5 text-muted-foreground" onClick={() => setShowCredentials((v) => !v)}>
+                                <Settings2 className="h-3.5 w-3.5"/>
+                                Credentials
+                            </Button>)}
+                        </div>
                     </div>
-                    {connected ? (<Badge className="gap-1 border-transparent bg-green-600 text-white hover:bg-green-600">
-                        <CheckCircle2 className="h-3 w-3"/>
-                        Connected
-                    </Badge>) : (<Badge variant="secondary" className="gap-1">
-                        <XCircle className="h-3 w-3"/>
-                        Not Connected
-                    </Badge>)}
-                </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                    <div className="space-y-2">
-                        <Label htmlFor="spotify-client-id">Client ID</Label>
-                        <Input id="spotify-client-id" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Your Spotify app Client ID" autoComplete="off"/>
-                    </div>
-                    <div className="space-y-2">
-                        <Label htmlFor="spotify-client-secret">Client Secret</Label>
-                        <Input id="spotify-client-secret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="Your Spotify app Client Secret" autoComplete="off"/>
+
+                    {showCredentialFields && (<>
+                        <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                            <Input aria-label="Client ID" value={clientId} onChange={(e) => setClientId(e.target.value)} placeholder="Client ID" autoComplete="off"/>
+                            <Input aria-label="Client Secret" type="password" value={clientSecret} onChange={(e) => setClientSecret(e.target.value)} placeholder="Client Secret" autoComplete="off"/>
+                        </div>
+                        {!connected && (<p className="text-xs text-muted-foreground">
+                            Add the redirect URI{" "}
+                            <code className="rounded bg-muted px-1 py-0.5 font-mono text-foreground">{REDIRECT_URI}</code>{" "}
+                            to your Spotify app.
+                        </p>)}
+                    </>)}
+
+                    <div className="flex flex-wrap gap-2">
+                        {showCredentialFields && (<Button size="sm" onClick={handleSaveCredentials} disabled={savingCredentials} className="gap-1.5">
+                            {savingCredentials ? <Spinner /> : <Save className="h-4 w-4"/>}
+                            Save
+                        </Button>)}
+                        {connected ? (<Button size="sm" variant="outline" onClick={handleDisconnect} className="gap-1.5">
+                            <Unplug className="h-4 w-4"/>
+                            Disconnect
+                        </Button>) : (<Button size="sm" variant="outline" onClick={handleConnect} disabled={connecting} className="gap-1.5">
+                            {connecting ? <Spinner /> : <PlugZap className="h-4 w-4"/>}
+                            {connecting ? "Waiting…" : "Connect"}
+                        </Button>)}
                     </div>
                 </div>
 
-                <div className="flex items-start gap-2 rounded-md border bg-muted/30 p-3 text-sm text-muted-foreground">
-                    <Info className="mt-0.5 h-4 w-4 shrink-0"/>
-                    <span>
-                        Register the redirect URI{" "}
-                        <code className="rounded bg-muted px-1 py-0.5 font-mono text-xs text-foreground">{REDIRECT_URI}</code>{" "}
-                        in your Spotify Developer dashboard for the app whose credentials you use here.
-                    </span>
-                </div>
+                {/* iPod */}
+                <div className="space-y-3 pt-4">
+                    <div className="flex items-center justify-between gap-2">
+                        <span className="text-sm font-medium">iPod</span>
+                        <div className="flex items-center gap-2">
+                            {ipod && (<Badge variant={ipod.is_rockbox ? undefined : "secondary"} className={ipod.is_rockbox ? "gap-1 border-transparent bg-green-600 text-white hover:bg-green-600" : ""}>
+                                {ipod.is_rockbox ? "Rockbox" : "No Rockbox"}
+                            </Badge>)}
+                            <Button variant="ghost" size="sm" onClick={handleDetectIpod} disabled={detecting} className="h-7 gap-1.5 text-muted-foreground">
+                                {detecting ? <Spinner /> : <Search className="h-3.5 w-3.5"/>}
+                                {ipod ? "Re-detect" : "Detect"}
+                            </Button>
+                        </div>
+                    </div>
 
-                <div className="flex flex-wrap gap-2">
-                    <Button onClick={handleSaveCredentials} disabled={savingCredentials} className="gap-1.5">
-                        {savingCredentials ? <Spinner /> : <Save className="h-4 w-4"/>}
-                        Save Credentials
-                    </Button>
-                    {connected ? (<Button variant="outline" onClick={handleDisconnect} className="gap-1.5">
-                        <Unplug className="h-4 w-4"/>
-                        Disconnect
-                    </Button>) : (<Button variant="outline" onClick={handleConnect} disabled={connecting} className="gap-1.5">
-                        {connecting ? <Spinner /> : <PlugZap className="h-4 w-4"/>}
-                        {connecting ? "Waiting for authorization..." : "Connect"}
-                    </Button>)}
+                    {ipod ? (<div className="flex items-center gap-3">
+                        <HardDrive className="h-4 w-4 shrink-0 text-muted-foreground"/>
+                        <div className="min-w-0 flex-1">
+                            <div className="flex items-center justify-between gap-2 text-xs">
+                                <span className="truncate font-medium">{ipod.name || "iPod"}</span>
+                                <span className="shrink-0 text-muted-foreground">{formatBytes(usedBytes)} / {formatBytes(ipod.total_bytes)}</span>
+                            </div>
+                            <Progress className="mt-1.5 h-1.5" value={usedPercent}/>
+                        </div>
+                    </div>) : (<p className="text-xs text-muted-foreground">{ipodError || "Connect your Rockbox iPod and click Detect."}</p>)}
                 </div>
             </CardContent>
         </Card>
 
+        {/* What to sync */}
         <Card>
-            <CardHeader>
+            <CardContent className="space-y-4 pt-6">
                 <div className="flex items-center justify-between gap-3">
-                    <div className="space-y-1">
-                        <CardTitle className="flex items-center gap-2">
-                            <Smartphone className="h-4 w-4"/>
-                            iPod
-                        </CardTitle>
-                        <CardDescription>
-                            Detect your connected Rockbox iPod.
-                        </CardDescription>
-                    </div>
-                    <Button variant="outline" size="sm" onClick={handleDetectIpod} disabled={detecting} className="gap-1.5">
-                        {detecting ? <Spinner /> : <Search className="h-4 w-4"/>}
-                        Detect iPod
-                    </Button>
-                </div>
-            </CardHeader>
-            <CardContent>
-                {ipod ? (<div className="space-y-4">
-                    <div className="flex flex-wrap items-center gap-2">
-                        <span className="text-base font-semibold">{ipod.name || "iPod"}</span>
-                        {ipod.is_rockbox ? (<Badge className="gap-1 border-transparent bg-green-600 text-white hover:bg-green-600">
-                            <CheckCircle2 className="h-3 w-3"/>
-                            Rockbox
-                        </Badge>) : (<Badge variant="secondary" className="gap-1">
-                            <XCircle className="h-3 w-3"/>
-                            Rockbox Not Detected
-                        </Badge>)}
-                    </div>
-                    <div className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
-                        <div className="space-y-1">
-                            <p className="text-xs uppercase tracking-wide text-muted-foreground">Mount Path</p>
-                            <p className="break-all font-mono text-xs">{ipod.mount_path || "-"}</p>
-                        </div>
-                        <div className="space-y-1">
-                            <p className="text-xs uppercase tracking-wide text-muted-foreground">Music Path</p>
-                            <p className="break-all font-mono text-xs">{ipod.music_path || "-"}</p>
-                        </div>
-                    </div>
-                    <div className="space-y-2">
-                        <div className="flex items-center justify-between text-sm">
-                            <span className="flex items-center gap-1.5 text-muted-foreground">
-                                <HardDrive className="h-4 w-4"/>
-                                Storage
-                            </span>
-                            <span className="font-mono text-xs">
-                                {formatBytes(ipod.total_bytes - ipod.free_bytes)} used of {formatBytes(ipod.total_bytes)}
-                                {" "}({formatBytes(ipod.free_bytes)} free)
-                            </span>
-                        </div>
-                        <Progress value={ipod.total_bytes > 0 ? ((ipod.total_bytes - ipod.free_bytes) / ipod.total_bytes) * 100 : 0}/>
-                    </div>
-                </div>) : (<div className="flex flex-col items-center justify-center gap-3 py-10 text-center text-muted-foreground">
-                    <div className="rounded-full bg-muted/50 p-4 ring-8 ring-muted/20">
-                        <Smartphone className="h-8 w-8 opacity-40"/>
-                    </div>
-                    <div className="space-y-1">
-                        <p className="font-medium text-foreground/80">{ipodError ? "No iPod found" : "No iPod detected"}</p>
-                        <p className="text-sm">{ipodError || "Connect your Rockbox iPod and click Detect iPod."}</p>
-                    </div>
-                </div>)}
-            </CardContent>
-        </Card>
-
-        <Card>
-            <CardHeader>
-                <div className="space-y-1">
-                    <CardTitle className="flex items-center gap-2">
-                        <ListMusic className="h-4 w-4"/>
-                        What to Sync
-                    </CardTitle>
-                    <CardDescription>
-                        Choose which parts of your library to copy to the iPod.
-                    </CardDescription>
-                </div>
-            </CardHeader>
-            <CardContent className="space-y-5">
-                <div className="flex items-center justify-between gap-3">
-                    <Label htmlFor="include-liked-songs" className="flex cursor-pointer items-center gap-2 font-normal">
-                        <Heart className="h-4 w-4"/>
+                    <Label htmlFor="include-liked-songs" className="flex cursor-pointer items-center gap-2 text-sm font-normal">
+                        <Heart className="h-4 w-4 text-muted-foreground"/>
                         Include Liked Songs
                     </Label>
                     <Switch id="include-liked-songs" checked={settings.includeLikedSongs} onCheckedChange={(checked) => void persistSettings({ ...settings, includeLikedSongs: checked })}/>
                 </div>
 
                 <div className="flex items-center justify-between gap-3">
-                    <Label htmlFor="auto-sync-on-launch" className="flex cursor-pointer items-center gap-2 font-normal">
-                        <RotateCw className="h-4 w-4"/>
-                        Sync Automatically on Launch
+                    <Label htmlFor="auto-sync-on-launch" className="flex cursor-pointer items-center gap-2 text-sm font-normal">
+                        <RotateCw className="h-4 w-4 text-muted-foreground"/>
+                        Sync automatically on launch
                     </Label>
                     <Switch id="auto-sync-on-launch" checked={settings.autoSyncOnLaunch} onCheckedChange={(checked) => void persistSettings({ ...settings, autoSyncOnLaunch: checked })}/>
                 </div>
 
-                <div className="space-y-3">
+                <div className="space-y-2 border-t pt-4">
                     <div className="flex items-center justify-between gap-2">
-                        <Label className="font-normal">Playlists</Label>
-                        <Button variant="outline" size="sm" onClick={handleLoadPlaylists} disabled={loadingPlaylists || !connected} className="gap-1.5">
-                            {loadingPlaylists ? <Spinner /> : <RefreshCw className="h-4 w-4"/>}
-                            Load Playlists
+                        <span className="text-sm font-medium">Playlists{settings.selectedPlaylistIds.length > 0 ? ` · ${settings.selectedPlaylistIds.length} selected` : ""}</span>
+                        <Button variant="ghost" size="sm" onClick={handleLoadPlaylists} disabled={loadingPlaylists || !connected} className="h-7 gap-1.5 text-muted-foreground">
+                            {loadingPlaylists ? <Spinner /> : <RefreshCw className="h-3.5 w-3.5"/>}
+                            {playlists.length > 0 ? "Reload" : "Load"}
                         </Button>
                     </div>
-                    {!connected ? (<p className="text-sm text-muted-foreground">Connect Spotify to load your playlists.</p>) : playlists.length === 0 ? (<p className="text-sm text-muted-foreground">
-                        {loadingPlaylists ? "Loading playlists..." : "No playlists loaded yet. Click Load Playlists."}
-                    </p>) : (<div className="max-h-72 space-y-1 overflow-y-auto rounded-md border p-1">
+                    {!connected ? (<p className="text-xs text-muted-foreground">Connect Spotify to load your playlists.</p>) : playlists.length === 0 ? (<p className="text-xs text-muted-foreground">
+                        {loadingPlaylists ? "Loading…" : "No playlists loaded yet."}
+                    </p>) : (<div className="max-h-64 space-y-0.5 overflow-y-auto rounded-md border p-1">
                         {playlists.map((playlist) => {
                             const checked = settings.selectedPlaylistIds.includes(playlist.id);
-                            return (<label key={playlist.id} className="flex cursor-pointer items-center gap-3 rounded-md px-2 py-2 transition-colors hover:bg-muted/50">
+                            return (<label key={playlist.id} className="flex cursor-pointer items-center gap-3 rounded px-2 py-1.5 transition-colors hover:bg-muted/50">
                                 <Checkbox className="shrink-0" checked={checked} onCheckedChange={(value) => togglePlaylist(playlist.id, value === true)}/>
-                                <div className="min-w-0 flex-1">
-                                    <p className="truncate text-sm font-medium">{playlist.name}</p>
-                                    <p className="truncate text-xs text-muted-foreground">{playlist.owner}</p>
-                                </div>
-                                <Badge variant="secondary" className="font-mono">
-                                    {playlist.track_count.toLocaleString("en-US")}
-                                </Badge>
+                                <span className="min-w-0 flex-1 truncate text-sm">{playlist.name}</span>
+                                <span className="shrink-0 font-mono text-xs text-muted-foreground">{playlist.track_count.toLocaleString("en-US")}</span>
                             </label>);
                         })}
                     </div>)}
@@ -510,55 +452,43 @@ export function IpodSyncPage() {
             </CardContent>
         </Card>
 
+        {/* Sync */}
         <Card>
-            <CardHeader>
-                <div className="space-y-1">
-                    <CardTitle className="flex items-center gap-2">
-                        <Download className="h-4 w-4"/>
-                        Sync
-                    </CardTitle>
-                    <CardDescription>
-                        Download your selected library as FLAC and copy it to the iPod.
-                    </CardDescription>
-                </div>
-            </CardHeader>
-            <CardContent className="space-y-4">
-                <div className="flex flex-wrap gap-2">
-                    <Button size="lg" onClick={handleSync} disabled={syncing || !connected} className="gap-2">
-                        {syncing ? <Spinner /> : <Download className="h-5 w-5"/>}
-                        {syncing ? "Syncing..." : "Sync now"}
+            <CardContent className="space-y-3 pt-6">
+                <div className="flex flex-wrap items-center gap-2">
+                    <Button onClick={handleSync} disabled={syncing || !connected} className="gap-2">
+                        {syncing ? <Spinner /> : <Download className="h-4 w-4"/>}
+                        {syncing ? "Syncing…" : "Sync now"}
                     </Button>
-                    {syncing && (<Button size="lg" variant="destructive" onClick={handleCancelSync} className="gap-2">
-                        <StopCircle className="h-5 w-5"/>
+                    {syncing && (<Button variant="destructive" onClick={handleCancelSync} className="gap-2">
+                        <StopCircle className="h-4 w-4"/>
                         Cancel
+                    </Button>)}
+                    {log.length > 0 && (<Button variant="ghost" size="sm" onClick={() => setShowLog((v) => !v)} className="ml-auto h-8 gap-1.5 text-muted-foreground">
+                        <ChevronDown className={`h-4 w-4 transition-transform ${showLog ? "rotate-180" : ""}`}/>
+                        {showLog ? "Hide log" : "Show log"}
                     </Button>)}
                 </div>
 
                 {(syncing || progress > 0 || statusLine) && (<div className="space-y-2">
-                    <div className="flex items-center justify-between text-sm">
-                        <span className="truncate text-muted-foreground">{statusLine || "Preparing..."}</span>
-                        <span className="shrink-0 font-mono text-xs">{Math.round(progress)}%</span>
+                    <div className="flex items-center justify-between text-xs">
+                        <span className="truncate text-muted-foreground">{statusLine || "Preparing…"}</span>
+                        <span className="shrink-0 font-mono">{Math.round(progress)}%</span>
                     </div>
                     <Progress value={progress}/>
                 </div>)}
 
-                {log.length > 0 && (<div ref={logContainerRef} className="max-h-56 overflow-y-auto rounded-md border bg-muted/30 p-3 font-mono text-xs leading-relaxed">
+                {showLog && log.length > 0 && (<div ref={logContainerRef} className="max-h-56 overflow-y-auto rounded-md border bg-muted/30 p-3 font-mono text-xs leading-relaxed">
                     {log.map((line, index) => (<div key={index} className="whitespace-pre-wrap break-all text-muted-foreground">
                         {line}
                     </div>))}
                 </div>)}
 
-                {syncResult && (<div className={`rounded-md border p-4 ${syncResult.failed > 0 ? "border-amber-500/40 bg-amber-500/10" : "border-green-500/40 bg-green-500/10"}`}>
-                    <p className="flex items-center gap-2 text-sm font-semibold">
-                        {syncResult.failed > 0 ? (<XCircle className="h-4 w-4 text-amber-600 dark:text-amber-400"/>) : (<CheckCircle2 className="h-4 w-4 text-green-600 dark:text-green-400"/>)}
-                        {syncResult.message || "Sync complete"}
-                    </p>
-                    <div className="mt-3 flex flex-wrap gap-2">
-                        <Badge variant="secondary" className="font-mono">Synced {syncResult.synced}</Badge>
-                        <Badge variant="secondary" className="font-mono">Skipped {syncResult.skipped}</Badge>
-                        <Badge variant="secondary" className="font-mono">Failed {syncResult.failed}</Badge>
-                        <Badge variant="secondary" className="font-mono">Total {syncResult.total}</Badge>
-                    </div>
+                {syncResult && (<div className={`flex flex-wrap items-center gap-x-4 gap-y-1 rounded-md border px-3 py-2 text-sm ${syncResult.failed > 0 ? "border-amber-500/40 bg-amber-500/10" : "border-green-500/40 bg-green-500/10"}`}>
+                    <span className="font-medium">{syncResult.synced} synced</span>
+                    <span className="text-muted-foreground">{syncResult.skipped} skipped</span>
+                    <span className="text-muted-foreground">{syncResult.failed} failed</span>
+                    <span className="text-muted-foreground">of {syncResult.total}</span>
                 </div>)}
             </CardContent>
         </Card>
