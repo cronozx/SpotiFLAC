@@ -295,8 +295,14 @@ func (a *App) SyncLibraryToIpod() (IpodSyncResult, error) {
 			}
 		}
 
-		flacPath, derr := a.downloadLibraryTrack(t, services, stagingBase, tidalAPI, qobuzAPI)
+		flacPath, derr := a.downloadLibraryTrackWithCooldown(t, services, stagingBase, tidalAPI, qobuzAPI)
 		if derr != nil || flacPath == "" {
+			if ipodSyncCancel.Load() {
+				_ = manifest.Save()
+				result.Message = fmt.Sprintf("Cancelled: %d synced, %d skipped, %d failed of %d", result.Synced, result.Skipped, result.Failed, result.Total)
+				a.emitSyncStatus(result.Message)
+				return result, nil
+			}
 			result.Failed++
 			a.emitSyncLog("✗ " + label + ": " + errText(derr))
 			continue
@@ -337,6 +343,66 @@ func (a *App) SyncLibraryToIpod() (IpodSyncResult, error) {
 	a.emitSyncStatus(result.Message)
 	a.emitSyncLog(result.Message)
 	return result, nil
+}
+
+// maxCooldownWaitsPerTrack caps how many times a single track will wait out a
+// community "scheduled break" before giving up on it.
+const maxCooldownWaitsPerTrack = 6
+
+// waitOutCommunityCooldown blocks until the community API cooldown has elapsed,
+// emitting a countdown status. Returns false if the sync was cancelled while
+// waiting.
+func (a *App) waitOutCommunityCooldown() bool {
+	announced := false
+	for {
+		if ipodSyncCancel.Load() {
+			return false
+		}
+		remaining := backend.CommunityCooldownRemaining()
+		if remaining <= 0 {
+			return true
+		}
+		if !announced {
+			a.emitSyncLog(fmt.Sprintf("Server on a scheduled break — waiting ~%ds before continuing…", int(remaining.Seconds())+1))
+			announced = true
+		}
+		a.emitSyncStatus(fmt.Sprintf("Server on a break — resuming in ~%ds…", int(remaining.Seconds())+1))
+
+		step := time.Second
+		if remaining < step {
+			step = remaining
+		}
+		time.Sleep(step)
+	}
+}
+
+// downloadLibraryTrackWithCooldown downloads a track, transparently waiting out
+// any community "scheduled break" cooldown and retrying so a cooldown doesn't
+// turn every remaining track into a failure.
+func (a *App) downloadLibraryTrackWithCooldown(t backend.LibraryTrack, services []string, stagingBase, tidalAPI, qobuzAPI string) (string, error) {
+	var lastErr error
+	for waits := 0; waits <= maxCooldownWaitsPerTrack; waits++ {
+		if !a.waitOutCommunityCooldown() {
+			return "", fmt.Errorf("cancelled")
+		}
+
+		flacPath, err := a.downloadLibraryTrack(t, services, stagingBase, tidalAPI, qobuzAPI)
+		if err == nil && flacPath != "" {
+			return flacPath, nil
+		}
+		lastErr = err
+
+		// If the failure triggered a fresh cooldown, loop to wait it out and
+		// retry this same track instead of failing it.
+		if backend.CommunityCooldownRemaining() > 0 {
+			continue
+		}
+		break
+	}
+	if lastErr == nil {
+		lastErr = fmt.Errorf("download failed")
+	}
+	return "", lastErr
 }
 
 // downloadLibraryTrack runs the existing download pipeline, trying each

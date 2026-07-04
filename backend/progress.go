@@ -177,6 +177,21 @@ func ClearCommunityCooldown() {
 	cooldownLock.Unlock()
 }
 
+// CommunityCooldownRemaining reports how long the community API cooldown
+// ("scheduled break") still has to run, or 0 if none is active.
+func CommunityCooldownRemaining() time.Duration {
+	cooldownLock.RLock()
+	defer cooldownLock.RUnlock()
+	if cooldownUntilMs <= 0 {
+		return 0
+	}
+	remainingMs := cooldownUntilMs - getCurrentTimeMillis()
+	if remainingMs <= 0 {
+		return 0
+	}
+	return time.Duration(remainingMs) * time.Millisecond
+}
+
 func SetDownloadSpeed(mbps float64) {
 	speedLock.Lock()
 	currentSpeed = mbps
