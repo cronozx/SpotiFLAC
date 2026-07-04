@@ -186,6 +186,15 @@ func (a *App) SyncLibraryToIpod() (IpodSyncResult, error) {
 	}
 	a.emitSyncLog(fmt.Sprintf("iPod detected: %s (%s, Rockbox: %v)", dev.Name, dev.MountPath, dev.IsRockbox))
 
+	// Index the songs already on the iPod so we can skip ones physically present
+	// (by ISRC, or artist+title), even if our manifest doesn't know about them.
+	a.emitSyncStatus("Scanning songs already on iPod…")
+	ipodIndex, scanErr := backend.ScanIpodLibrary(dev)
+	if scanErr != nil {
+		a.emitSyncLog("Warning: iPod library scan failed: " + scanErr.Error())
+	}
+	a.emitSyncLog(fmt.Sprintf("iPod library: %d existing songs indexed", ipodIndex.FileCount()))
+
 	syncSettings, _ := a.GetIpodSyncSettings()
 
 	// Build the full track list from Liked Songs + selected playlists.
@@ -258,6 +267,20 @@ func (a *App) SyncLibraryToIpod() (IpodSyncResult, error) {
 		a.emitSyncStatus(fmt.Sprintf("(%d/%d) %s", i+1, result.Total, label))
 		a.emitSyncProgress(int(float64(i) / float64(result.Total) * 100))
 
+		// Skip songs already physically on the iPod (matched by ISRC, else by
+		// artist+title), and record them so the manifest stays in sync.
+		if existingPath, found := ipodIndex.Match(t.ISRC, t.Artists, t.Name); found {
+			result.Skipped++
+			if t.SpotifyID != "" {
+				var size int64
+				if info, e := os.Stat(existingPath); e == nil {
+					size = info.Size()
+				}
+				manifest.Add(t.SpotifyID, existingPath, size)
+			}
+			continue
+		}
+
 		if t.SpotifyID != "" {
 			// Skip only when the track is genuinely present on the iPod, not
 			// merely recorded in our manifest. If it was deleted from the device
@@ -293,6 +316,7 @@ func (a *App) SyncLibraryToIpod() (IpodSyncResult, error) {
 		if t.SpotifyID != "" {
 			manifest.Add(t.SpotifyID, dest, size)
 		}
+		ipodIndex.Add(t.ISRC, t.Artists, t.Name, dest)
 		if copied {
 			a.emitSyncLog("✓ " + label)
 		} else {

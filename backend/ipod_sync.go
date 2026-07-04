@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -13,12 +14,13 @@ import (
 	"strings"
 	"sync"
 	"time"
+	"unicode"
 )
 
 type IpodDevice struct {
 	Name       string `json:"name"`
-	MountPath  string `json:"mount_path"`  // e.g. /Volumes/IPOD
-	MusicPath  string `json:"music_path"`  // <MountPath>/Music
+	MountPath  string `json:"mount_path"` // e.g. /Volumes/IPOD
+	MusicPath  string `json:"music_path"` // <MountPath>/Music
 	Connected  bool   `json:"connected"`
 	IsRockbox  bool   `json:"is_rockbox"` // true if a .rockbox dir exists at volume root
 	FreeBytes  uint64 `json:"free_bytes"`
@@ -29,16 +31,16 @@ const ipodSyncManifestFile = "ipod_sync_manifest.json"
 
 // systemVolumeNames are volume names that are never an iPod.
 var systemVolumeNames = map[string]struct{}{
-	"Macintosh HD":            {},
-	"Macintosh HD - Data":     {},
-	"com.apple.TimeMachine":   {},
-	"Recovery":                {},
-	"Preboot":                 {},
-	"VM":                      {},
-	"Update":                  {},
-	"xarts":                   {},
-	"iSCPreboot":              {},
-	"Hardware":                {},
+	"Macintosh HD":          {},
+	"Macintosh HD - Data":   {},
+	"com.apple.TimeMachine": {},
+	"Recovery":              {},
+	"Preboot":               {},
+	"VM":                    {},
+	"Update":                {},
+	"xarts":                 {},
+	"iSCPreboot":            {},
+	"Hardware":              {},
 }
 
 // DetectIpod returns the best-guess connected iPod volume.
@@ -453,6 +455,148 @@ func (m *SyncManifest) Remove(spotifyID string) {
 	defer m.mu.Unlock()
 
 	delete(m.Entries, spotifyID)
+}
+
+// ipodAudioExts are the audio file extensions considered when indexing an iPod.
+var ipodAudioExts = map[string]bool{
+	".flac": true, ".mp3": true, ".m4a": true, ".alac": true, ".ogg": true,
+	".opus": true, ".wav": true, ".aac": true, ".aiff": true, ".aif": true,
+	".ape": true, ".wv": true, ".wma": true,
+}
+
+// IpodLibraryIndex indexes the audio files already present on an iPod so a sync
+// can skip songs that are physically there, regardless of what our manifest
+// records. Songs are matched by ISRC first, then by normalized artist+title.
+type IpodLibraryIndex struct {
+	byISRC map[string]string // ISRC (upper) -> file path
+	byName map[string]string // "artist|title" (normalized) -> file path
+	files  int
+}
+
+// FileCount reports how many audio files were scanned on the iPod.
+func (idx *IpodLibraryIndex) FileCount() int {
+	if idx == nil {
+		return 0
+	}
+	return idx.files
+}
+
+// Match reports whether a song is already present on the iPod, returning the
+// matching file path. ISRC is authoritative; artist+title is a fallback for
+// files lacking an ISRC tag.
+func (idx *IpodLibraryIndex) Match(isrc, artists, title string) (string, bool) {
+	if idx == nil {
+		return "", false
+	}
+	if code := strings.ToUpper(strings.TrimSpace(isrc)); code != "" {
+		if path, ok := idx.byISRC[code]; ok {
+			return path, true
+		}
+	}
+	if key := trackMatchKey(artists, title); key != "" {
+		if path, ok := idx.byName[key]; ok {
+			return path, true
+		}
+	}
+	return "", false
+}
+
+// Add records a song in the index (used for songs copied during the current
+// sync so later duplicates in the same run are skipped).
+func (idx *IpodLibraryIndex) Add(isrc, artists, title, path string) {
+	if idx == nil {
+		return
+	}
+	if code := strings.ToUpper(strings.TrimSpace(isrc)); code != "" {
+		if _, exists := idx.byISRC[code]; !exists {
+			idx.byISRC[code] = path
+		}
+	}
+	if key := trackMatchKey(artists, title); key != "" {
+		if _, exists := idx.byName[key]; !exists {
+			idx.byName[key] = path
+		}
+	}
+}
+
+// ScanIpodLibrary walks the iPod's music folder and reads tags from every audio
+// file to build a content index. Files that can't be read are skipped.
+func ScanIpodLibrary(dev IpodDevice) (*IpodLibraryIndex, error) {
+	idx := &IpodLibraryIndex{
+		byISRC: make(map[string]string),
+		byName: make(map[string]string),
+	}
+
+	root := dev.MusicPath
+	if root == "" {
+		return idx, nil
+	}
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		return idx, nil
+	}
+
+	walkErr := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if !ipodAudioExts[strings.ToLower(filepath.Ext(path))] {
+			return nil
+		}
+		idx.files++
+
+		meta, merr := extractFullMetadataWithTagLib(path)
+		if merr != nil {
+			return nil
+		}
+		if code := strings.ToUpper(strings.TrimSpace(meta.ISRC)); code != "" {
+			if _, exists := idx.byISRC[code]; !exists {
+				idx.byISRC[code] = path
+			}
+		}
+		if key := trackMatchKey(meta.Artist, meta.Title); key != "" {
+			if _, exists := idx.byName[key]; !exists {
+				idx.byName[key] = path
+			}
+		}
+		return nil
+	})
+
+	return idx, walkErr
+}
+
+// trackMatchKey builds a normalized "artist|title" key for fuzzy matching. It
+// returns "" when there is no usable title.
+func trackMatchKey(artists, title string) string {
+	normTitle := normalizeMatchValue(title)
+	if normTitle == "" {
+		return ""
+	}
+	return normalizeMatchValue(firstArtistName(artists)) + "|" + normTitle
+}
+
+// normalizeMatchValue lowercases a string and strips everything but letters and
+// digits so cosmetic differences (spacing, punctuation, feat. tags) don't block
+// a match.
+func normalizeMatchValue(s string) string {
+	var b strings.Builder
+	for _, r := range strings.ToLower(s) {
+		if unicode.IsLetter(r) || unicode.IsDigit(r) {
+			b.WriteRune(r)
+		}
+	}
+	return b.String()
+}
+
+func firstArtistName(artists string) string {
+	artists = strings.TrimSpace(artists)
+	lower := strings.ToLower(artists)
+	cut := len(artists)
+	for _, sep := range []string{";", ",", " & ", " x ", " feat", " ft.", " ft "} {
+		if i := strings.Index(lower, sep); i >= 0 && i < cut {
+			cut = i
+		}
+	}
+	return strings.TrimSpace(artists[:cut])
 }
 
 // Add records a synced track.
