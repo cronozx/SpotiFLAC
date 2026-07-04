@@ -144,6 +144,94 @@ func (a *App) CancelIpodSync() error {
 	return nil
 }
 
+// IpodReorganizeResult summarizes a one-time reorganize pass.
+type IpodReorganizeResult struct {
+	Moved   int    `json:"moved"`
+	InPlace int    `json:"in_place"`
+	Failed  int    `json:"failed"`
+	Total   int    `json:"total"`
+	Message string `json:"message"`
+}
+
+// ReorganizeIpodLibrary moves every audio file already on the iPod into the
+// sorted <Artist>/<Album>/<NN Title> layout, then removes emptied folders. This
+// is a one-time cleanup for files placed by older syncs or added manually.
+func (a *App) ReorganizeIpodLibrary() (IpodReorganizeResult, error) {
+	result := IpodReorganizeResult{}
+
+	if !ipodSyncRunning.CompareAndSwap(false, true) {
+		return result, fmt.Errorf("a sync or reorganize is already in progress")
+	}
+	defer ipodSyncRunning.Store(false)
+	ipodSyncCancel.Store(false)
+
+	dev, err := backend.DetectIpod()
+	if err != nil {
+		return result, fmt.Errorf("iPod not detected: %w", err)
+	}
+
+	a.emitSyncStatus("Scanning iPod files…")
+	files, err := backend.ListIpodAudioFiles(dev)
+	if err != nil {
+		return result, fmt.Errorf("failed to list iPod files: %w", err)
+	}
+	result.Total = len(files)
+	if result.Total == 0 {
+		result.Message = "No audio files on the iPod to reorganize."
+		a.emitSyncStatus(result.Message)
+		return result, nil
+	}
+	a.emitSyncLog(fmt.Sprintf("Reorganizing %d files into Artist/Album/Track…", result.Total))
+
+	for i, file := range files {
+		if ipodSyncCancel.Load() {
+			result.Message = fmt.Sprintf("Cancelled: %d moved, %d already sorted, %d failed of %d", result.Moved, result.InPlace, result.Failed, result.Total)
+			a.emitSyncStatus(result.Message)
+			backend.RemoveEmptyDirsUnder(dev.MusicPath)
+			return result, nil
+		}
+		a.emitSyncProgress(int(float64(i) / float64(result.Total) * 100))
+
+		meta, merr := backend.ExtractFullMetadataFromFile(file)
+		if merr != nil {
+			result.Failed++
+			a.emitSyncLog("✗ " + filepath.Base(file) + ": couldn't read tags")
+			continue
+		}
+
+		track := backend.LibraryTrack{
+			Artists:     meta.Artist,
+			AlbumArtist: meta.AlbumArtist,
+			AlbumName:   meta.Album,
+			Name:        meta.Title,
+			TrackNumber: meta.TrackNumber,
+			DiscNumber:  meta.DiscNumber,
+			ISRC:        meta.ISRC,
+		}
+		relDir, destName := a.ipodDestination(track, file)
+
+		moved, dest, mErr := backend.MoveTrackOnIpod(dev, file, relDir, destName)
+		if mErr != nil {
+			result.Failed++
+			a.emitSyncLog("✗ " + filepath.Base(file) + ": " + mErr.Error())
+			continue
+		}
+		if moved {
+			result.Moved++
+			a.emitSyncStatus(fmt.Sprintf("(%d/%d) %s", i+1, result.Total, filepath.Base(dest)))
+		} else {
+			result.InPlace++
+		}
+	}
+
+	backend.RemoveEmptyDirsUnder(dev.MusicPath)
+	a.emitSyncProgress(100)
+	result.Message = fmt.Sprintf("Done: %d moved, %d already sorted, %d failed of %d", result.Moved, result.InPlace, result.Failed, result.Total)
+	a.emitSyncStatus(result.Message)
+	a.emitSyncLog(result.Message)
+	return result, nil
+}
+
 // --- Orchestrator ---
 
 func (a *App) emitSyncStatus(status string) {

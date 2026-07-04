@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -464,6 +465,120 @@ func (m *SyncManifest) Remove(spotifyID string) {
 	defer m.mu.Unlock()
 
 	delete(m.Entries, spotifyID)
+}
+
+// ListIpodAudioFiles returns every audio file currently on the iPod.
+func ListIpodAudioFiles(dev IpodDevice) ([]string, error) {
+	var files []string
+	root := dev.MusicPath
+	if root == "" {
+		return files, nil
+	}
+	if info, err := os.Stat(root); err != nil || !info.IsDir() {
+		return files, nil
+	}
+	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() {
+			return nil
+		}
+		if ipodAudioExts[strings.ToLower(filepath.Ext(path))] {
+			files = append(files, path)
+		}
+		return nil
+	})
+	return files, err
+}
+
+// MoveTrackOnIpod moves srcPath to <MusicPath>/<relDir>/<destName> within the
+// same iPod. Returns moved=false when the file is already in place or when an
+// identical duplicate already exists at the target (in which case the source is
+// removed). A differing file at the target name is disambiguated with a suffix.
+func MoveTrackOnIpod(dev IpodDevice, srcPath, relDir, destName string) (moved bool, dest string, err error) {
+	if dev.MusicPath == "" {
+		return false, "", errors.New("device music path is empty")
+	}
+	srcInfo, err := os.Stat(srcPath)
+	if err != nil {
+		return false, "", fmt.Errorf("source file not accessible: %w", err)
+	}
+
+	destDir := dev.MusicPath
+	if cleaned := sanitizeRelDir(relDir); cleaned != "" {
+		destDir = filepath.Join(destDir, cleaned)
+	}
+
+	srcExt := filepath.Ext(srcPath)
+	base := sanitizeComponent(destName)
+	if base == "" {
+		base = sanitizeComponent(filepath.Base(srcPath))
+	}
+	if base == "" {
+		return false, "", errors.New("invalid destination name")
+	}
+	if srcExt != "" && !strings.EqualFold(filepath.Ext(base), srcExt) {
+		base = strings.TrimSuffix(base, filepath.Ext(base)) + srcExt
+	}
+	dest = filepath.Join(destDir, base)
+
+	if pathsEqual(dest, srcPath) {
+		return false, dest, nil // already in the right place
+	}
+
+	if err := os.MkdirAll(destDir, 0o755); err != nil {
+		return false, "", fmt.Errorf("failed to create destination directory: %w", err)
+	}
+
+	if destInfo, statErr := os.Stat(dest); statErr == nil {
+		if !destInfo.IsDir() && destInfo.Size() == srcInfo.Size() {
+			// Identical duplicate already sorted; drop the stray source.
+			_ = os.Remove(srcPath)
+			return false, dest, nil
+		}
+		dest = uniqueDestPath(destDir, base)
+	}
+
+	if err := os.Rename(srcPath, dest); err != nil {
+		return false, dest, fmt.Errorf("failed to move file: %w", err)
+	}
+	return true, dest, nil
+}
+
+// RemoveEmptyDirsUnder deletes empty directories beneath root (but not root
+// itself), e.g. leftover per-playlist folders after a reorganize.
+func RemoveEmptyDirsUnder(root string) {
+	if root == "" {
+		return
+	}
+	var dirs []string
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err == nil && d.IsDir() && !pathsEqual(path, root) {
+			dirs = append(dirs, path)
+		}
+		return nil
+	})
+	// Deepest first so parents become empty after children are removed.
+	sort.Slice(dirs, func(i, j int) bool { return len(dirs[i]) > len(dirs[j]) })
+	for _, dir := range dirs {
+		if entries, err := os.ReadDir(dir); err == nil && len(entries) == 0 {
+			_ = os.Remove(dir)
+		}
+	}
+}
+
+func pathsEqual(a, b string) bool {
+	return strings.EqualFold(filepath.Clean(a), filepath.Clean(b))
+}
+
+func uniqueDestPath(dir, base string) string {
+	ext := filepath.Ext(base)
+	stem := strings.TrimSuffix(base, ext)
+	for i := 2; i < 1000; i++ {
+		candidate := filepath.Join(dir, fmt.Sprintf("%s (%d)%s", stem, i, ext))
+		if _, err := os.Stat(candidate); os.IsNotExist(err) {
+			return candidate
+		}
+	}
+	return filepath.Join(dir, base)
 }
 
 // ipodAudioExts are the audio file extensions considered when indexing an iPod.

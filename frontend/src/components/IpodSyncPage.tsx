@@ -8,8 +8,8 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Progress } from "@/components/ui/progress";
 import { Spinner } from "@/components/ui/spinner";
 import { Card, CardContent } from "@/components/ui/card";
-import { HardDrive, Heart, RotateCw, PlugZap, Unplug, Save, RefreshCw, Search, Download, StopCircle, CheckCircle2, ChevronDown, Settings2 } from "lucide-react";
-import { SaveSpotifyCredentials, GetSpotifyCredentials, ConnectSpotify, SpotifyConnectionStatus, DisconnectSpotify, DetectIpod, GetIpodSyncSettings, SaveIpodSyncSettings, ListSpotifyPlaylists, SyncLibraryToIpod, CancelIpodSync } from "../../wailsjs/go/main/App";
+import { HardDrive, Heart, RotateCw, PlugZap, Unplug, Save, RefreshCw, Search, Download, StopCircle, CheckCircle2, ChevronDown, Settings2, FolderTree } from "lucide-react";
+import { SaveSpotifyCredentials, GetSpotifyCredentials, ConnectSpotify, SpotifyConnectionStatus, DisconnectSpotify, DetectIpod, GetIpodSyncSettings, SaveIpodSyncSettings, ListSpotifyPlaylists, SyncLibraryToIpod, CancelIpodSync, ReorganizeIpodLibrary } from "../../wailsjs/go/main/App";
 import { EventsOn, EventsOff } from "../../wailsjs/runtime/runtime";
 import { toastWithSound as toast } from "@/lib/toast-with-sound";
 
@@ -42,6 +42,13 @@ interface SpotifyPlaylist {
 interface SyncResult {
     synced: number;
     skipped: number;
+    failed: number;
+    total: number;
+    message: string;
+}
+interface ReorganizeResult {
+    moved: number;
+    in_place: number;
     failed: number;
     total: number;
     message: string;
@@ -79,6 +86,7 @@ export function IpodSyncPage() {
     const [loadingPlaylists, setLoadingPlaylists] = useState(false);
 
     const [syncing, setSyncing] = useState(false);
+    const [reorganizing, setReorganizing] = useState(false);
     const [progress, setProgress] = useState(0);
     const [statusLine, setStatusLine] = useState("");
     const [log, setLog] = useState<string[]>([]);
@@ -325,6 +333,30 @@ export function IpodSyncPage() {
         }
     };
 
+    const handleReorganize = async () => {
+        setReorganizing(true);
+        setSyncResult(null);
+        setProgress(0);
+        setStatusLine("");
+        setLog([]);
+        try {
+            const result = (await ReorganizeIpodLibrary()) as ReorganizeResult;
+            if (result.failed > 0) {
+                toast.error(result.message || `Reorganize finished with ${result.failed} failures`);
+            }
+            else {
+                toast.success(result.message || `Reorganized ${result.moved} files`);
+            }
+        }
+        catch (err) {
+            console.error("Failed to reorganize iPod library:", err);
+            toast.error(`Reorganize failed: ${err}`);
+        }
+        finally {
+            setReorganizing(false);
+        }
+    };
+
     const usedBytes = ipod ? Math.max(0, ipod.total_bytes - ipod.free_bytes) : 0;
     const usedPercent = ipod && ipod.total_bytes > 0 ? (usedBytes / ipod.total_bytes) * 100 : 0;
 
@@ -395,15 +427,21 @@ export function IpodSyncPage() {
                         </div>
                     </div>
 
-                    {ipod ? (<div className="flex items-center gap-3">
-                        <HardDrive className="h-4 w-4 shrink-0 text-muted-foreground"/>
-                        <div className="min-w-0 flex-1">
-                            <div className="flex items-center justify-between gap-2 text-xs">
-                                <span className="truncate font-medium">{ipod.name || "iPod"}</span>
-                                <span className="shrink-0 text-muted-foreground">{formatBytes(usedBytes)} / {formatBytes(ipod.total_bytes)}</span>
+                    {ipod ? (<div className="space-y-2.5">
+                        <div className="flex items-center gap-3">
+                            <HardDrive className="h-4 w-4 shrink-0 text-muted-foreground"/>
+                            <div className="min-w-0 flex-1">
+                                <div className="flex items-center justify-between gap-2 text-xs">
+                                    <span className="truncate font-medium">{ipod.name || "iPod"}</span>
+                                    <span className="shrink-0 text-muted-foreground">{formatBytes(usedBytes)} / {formatBytes(ipod.total_bytes)}</span>
+                                </div>
+                                <Progress className="mt-1.5 h-1.5" value={usedPercent}/>
                             </div>
-                            <Progress className="mt-1.5 h-1.5" value={usedPercent}/>
                         </div>
+                        <Button variant="outline" size="sm" onClick={handleReorganize} disabled={reorganizing || syncing} className="gap-1.5">
+                            {reorganizing ? <Spinner /> : <FolderTree className="h-4 w-4"/>}
+                            {reorganizing ? "Reorganizing…" : "Reorganize files into Artist / Album"}
+                        </Button>
                     </div>) : (<p className="text-xs text-muted-foreground">{ipodError || "Connect your Rockbox iPod and click Detect."}</p>)}
                 </div>
             </CardContent>
@@ -456,11 +494,11 @@ export function IpodSyncPage() {
         <Card>
             <CardContent className="space-y-3 pt-6">
                 <div className="flex flex-wrap items-center gap-2">
-                    <Button onClick={handleSync} disabled={syncing || !connected} className="gap-2">
+                    <Button onClick={handleSync} disabled={syncing || reorganizing || !connected} className="gap-2">
                         {syncing ? <Spinner /> : <Download className="h-4 w-4"/>}
                         {syncing ? "Syncing…" : "Sync now"}
                     </Button>
-                    {syncing && (<Button variant="destructive" onClick={handleCancelSync} className="gap-2">
+                    {(syncing || reorganizing) && (<Button variant="destructive" onClick={handleCancelSync} className="gap-2">
                         <StopCircle className="h-4 w-4"/>
                         Cancel
                     </Button>)}
