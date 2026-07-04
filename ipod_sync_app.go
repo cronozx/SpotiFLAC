@@ -253,6 +253,12 @@ func (a *App) SyncLibraryToIpod() (IpodSyncResult, error) {
 	services := resolveServiceOrder(appSettings)
 	stagingBase := ipodStagingDir(appSettings)
 	tidalAPI, qobuzAPI := ipodCustomAPIs(appSettings)
+	is24Bit := true
+	if appSettings != nil {
+		if q, ok := appSettings["autoQuality"].(string); ok && q != "" {
+			is24Bit = q == "24"
+		}
+	}
 	a.emitSyncLog(fmt.Sprintf("Providers: %s | staging: %s", strings.Join(services, " → "), stagingBase))
 
 	for i, t := range tracks {
@@ -295,7 +301,7 @@ func (a *App) SyncLibraryToIpod() (IpodSyncResult, error) {
 			}
 		}
 
-		flacPath, derr := a.downloadLibraryTrackWithCooldown(t, services, stagingBase, tidalAPI, qobuzAPI)
+		flacPath, derr := a.downloadLibraryTrackWithCooldown(t, services, stagingBase, tidalAPI, qobuzAPI, is24Bit)
 		if derr != nil || flacPath == "" {
 			if ipodSyncCancel.Load() {
 				_ = manifest.Save()
@@ -379,14 +385,14 @@ func (a *App) waitOutCommunityCooldown() bool {
 // downloadLibraryTrackWithCooldown downloads a track, transparently waiting out
 // any community "scheduled break" cooldown and retrying so a cooldown doesn't
 // turn every remaining track into a failure.
-func (a *App) downloadLibraryTrackWithCooldown(t backend.LibraryTrack, services []string, stagingBase, tidalAPI, qobuzAPI string) (string, error) {
+func (a *App) downloadLibraryTrackWithCooldown(t backend.LibraryTrack, services []string, stagingBase, tidalAPI, qobuzAPI string, is24Bit bool) (string, error) {
 	var lastErr error
 	for waits := 0; waits <= maxCooldownWaitsPerTrack; waits++ {
 		if !a.waitOutCommunityCooldown() {
 			return "", fmt.Errorf("cancelled")
 		}
 
-		flacPath, err := a.downloadLibraryTrack(t, services, stagingBase, tidalAPI, qobuzAPI)
+		flacPath, err := a.downloadLibraryTrack(t, services, stagingBase, tidalAPI, qobuzAPI, is24Bit)
 		if err == nil && flacPath != "" {
 			return flacPath, nil
 		}
@@ -405,16 +411,29 @@ func (a *App) downloadLibraryTrackWithCooldown(t backend.LibraryTrack, services 
 	return "", lastErr
 }
 
-// downloadLibraryTrack runs the existing download pipeline, trying each
-// configured provider in order until one succeeds. Returns the FLAC path.
-func (a *App) downloadLibraryTrack(t backend.LibraryTrack, services []string, stagingBase, tidalAPI, qobuzAPI string) (string, error) {
+// downloadLibraryTrack mirrors the app's playlist-download flow to avoid pegging
+// the community API: it resolves the track's streaming URLs once via Songlink,
+// then only attempts providers that actually have the track (passing the
+// resolved URL) with no internal fallback. This keeps requests-per-track low.
+func (a *App) downloadLibraryTrack(t backend.LibraryTrack, services []string, stagingBase, tidalAPI, qobuzAPI string, is24Bit bool) (string, error) {
+	// Resolve availability once, like the app does, instead of blindly hitting
+	// every provider. Only needed when Tidal/Amazon are in the order.
+	var urls *backend.SongLinkURLs
+	if t.SpotifyID != "" && needsStreamingURLs(services) {
+		client := backend.NewSongLinkClient()
+		if resolved, err := client.GetAllURLsFromSpotify(t.SpotifyID, ""); err == nil {
+			urls = resolved
+		}
+	}
+
 	var lastErr error
+	tried := false
 	for _, svc := range services {
 		if ipodSyncCancel.Load() {
 			return "", fmt.Errorf("cancelled")
 		}
+
 		req := DownloadRequest{
-			Service:       svc,
 			SpotifyID:     t.SpotifyID,
 			TrackName:     t.Name,
 			ArtistName:    t.Artists,
@@ -425,11 +444,34 @@ func (a *App) downloadLibraryTrack(t backend.LibraryTrack, services []string, st
 			ISRC:          t.ISRC,
 			PlaylistName:  t.PlaylistName,
 			OutputDir:     stagingBase,
-			AudioFormat:   "LOSSLESS",
-			AllowFallback: true,
+			AllowFallback: false,
 			TidalAPIURL:   tidalAPI,
 			QobuzAPIURL:   qobuzAPI,
 		}
+
+		switch svc {
+		case "tidal":
+			if urls == nil || urls.TidalURL == "" {
+				continue // Tidal doesn't have it; skip without a request.
+			}
+			req.Service = "tidal"
+			req.ServiceURL = urls.TidalURL
+			req.AudioFormat = "LOSSLESS"
+		case "amazon":
+			if urls == nil || urls.AmazonURL == "" {
+				continue
+			}
+			req.Service = "amazon"
+			req.ServiceURL = urls.AmazonURL
+			req.AudioFormat = amazonQuality(is24Bit)
+		case "qobuz":
+			req.Service = "qobuz"
+			req.AudioFormat = qobuzQuality(is24Bit)
+		default:
+			continue
+		}
+
+		tried = true
 		resp, err := a.DownloadTrack(req)
 		if err == nil && resp.Success {
 			return resp.File, nil
@@ -442,11 +484,44 @@ func (a *App) downloadLibraryTrack(t backend.LibraryTrack, services []string, st
 		default:
 			lastErr = fmt.Errorf("provider %s failed", svc)
 		}
+
+		// If the server put us on a cooldown, stop hammering other providers;
+		// the caller waits it out and retries.
+		if backend.CommunityCooldownRemaining() > 0 {
+			break
+		}
+	}
+
+	if !tried {
+		return "", fmt.Errorf("no provider had this track")
 	}
 	if lastErr == nil {
 		lastErr = fmt.Errorf("all providers failed")
 	}
 	return "", lastErr
+}
+
+func needsStreamingURLs(services []string) bool {
+	for _, s := range services {
+		if s == "tidal" || s == "amazon" {
+			return true
+		}
+	}
+	return false
+}
+
+func amazonQuality(is24Bit bool) string {
+	if is24Bit {
+		return "24"
+	}
+	return "16"
+}
+
+func qobuzQuality(is24Bit bool) string {
+	if is24Bit {
+		return "27"
+	}
+	return "6"
 }
 
 // maybeAutoSyncIpod runs at startup and triggers a sync when the user has opted
