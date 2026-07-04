@@ -314,7 +314,8 @@ func (a *App) SyncLibraryToIpod() (IpodSyncResult, error) {
 			continue
 		}
 
-		copied, dest, cerr := backend.CopyTrackToIpod(dev, flacPath, t.PlaylistName)
+		relDir, destName := a.ipodDestination(t, flacPath)
+		copied, dest, cerr := backend.CopyTrackToIpod(dev, flacPath, relDir, destName)
 		if cerr != nil {
 			result.Failed++
 			a.emitSyncLog("✗ copy " + label + ": " + cerr.Error())
@@ -499,6 +500,43 @@ func (a *App) downloadLibraryTrack(t backend.LibraryTrack, services []string, st
 		lastErr = fmt.Errorf("all providers failed")
 	}
 	return "", lastErr
+}
+
+// ipodDestination builds the sorted on-iPod location for a track:
+// <Artist>/<Album>/<NN Title>.<ext>, so browsing the iPod is ordered by artist,
+// then album, then track number.
+func (a *App) ipodDestination(t backend.LibraryTrack, srcPath string) (relDir, destName string) {
+	artist := a.getFirstArtist(strings.TrimSpace(t.AlbumArtist))
+	if artist == "" {
+		artist = a.getFirstArtist(strings.TrimSpace(t.Artists))
+	}
+	if artist == "" {
+		artist = "Unknown Artist"
+	}
+	album := strings.TrimSpace(t.AlbumName)
+	if album == "" {
+		album = "Unknown Album"
+	}
+	relDir = artist + "/" + album
+
+	title := strings.TrimSpace(t.Name)
+	if title == "" {
+		title = strings.TrimSuffix(filepath.Base(srcPath), filepath.Ext(srcPath))
+	}
+	prefix := ""
+	if t.TrackNumber > 0 {
+		if t.DiscNumber > 1 {
+			prefix = fmt.Sprintf("%d-%02d ", t.DiscNumber, t.TrackNumber)
+		} else {
+			prefix = fmt.Sprintf("%02d ", t.TrackNumber)
+		}
+	}
+	ext := filepath.Ext(srcPath)
+	if ext == "" {
+		ext = ".flac"
+	}
+	destName = prefix + title + ext
+	return relDir, destName
 }
 
 func needsStreamingURLs(services []string) bool {

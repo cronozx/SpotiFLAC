@@ -206,10 +206,11 @@ func IpodDeviceFromPath(mountPath string) (IpodDevice, error) {
 	return dev, nil
 }
 
-// CopyTrackToIpod copies srcFlacPath into <MusicPath>/<relDir>/<basename>,
-// creating dirs. Skips (copied=false) if a destination file already exists with
-// the same size. Returns final dest path.
-func CopyTrackToIpod(dev IpodDevice, srcFlacPath, relDir string) (copied bool, dest string, err error) {
+// CopyTrackToIpod copies srcFlacPath into <MusicPath>/<relDir>/<destName>,
+// creating dirs. When destName is empty the source file's name is used. The
+// source file's extension is always preserved. Skips (copied=false) if a
+// destination file already exists with the same size. Returns final dest path.
+func CopyTrackToIpod(dev IpodDevice, srcFlacPath, relDir, destName string) (copied bool, dest string, err error) {
 	if dev.MusicPath == "" {
 		return false, "", errors.New("device music path is empty")
 	}
@@ -231,9 +232,17 @@ func CopyTrackToIpod(dev IpodDevice, srcFlacPath, relDir string) (copied bool, d
 		return false, "", fmt.Errorf("failed to create destination directory: %w", err)
 	}
 
-	base := sanitizeComponent(filepath.Base(srcFlacPath))
+	srcExt := filepath.Ext(srcFlacPath)
+	base := sanitizeComponent(destName)
+	if base == "" {
+		base = sanitizeComponent(filepath.Base(srcFlacPath))
+	}
 	if base == "" {
 		return false, "", errors.New("source file has no valid name")
+	}
+	// Always keep the source extension so the name is well-formed.
+	if srcExt != "" && !strings.EqualFold(filepath.Ext(base), srcExt) {
+		base = strings.TrimSuffix(base, filepath.Ext(base)) + srcExt
 	}
 	dest = filepath.Join(destDir, base)
 
